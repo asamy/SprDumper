@@ -76,6 +76,7 @@ typedef struct item {
 typedef struct itemlist {
 	item_t *head;
 	item_t *tail;
+	uint32_t count;
 } itemlist_t;
 
 static
@@ -128,6 +129,7 @@ static itemlist_t *itemlist_init(void)
 		return NULL;
 
 	ret->head = ret->tail = NULL;
+	ret->count = 0;
 	return ret;
 }
 
@@ -154,6 +156,8 @@ static void itemlist_append(itemlist_t *list, item_t *newItem)
 		newItem->prev    = list->tail;
 		list->tail       = newItem;
 	}
+
+	++list->count;
 }
 
 static item_t *item_unserialize(FILE *fp, uint16_t id)
@@ -333,7 +337,7 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 		}
 
 		for (i = 0; i < transparentPixels; ++i) {
-			pixel.red = pixel.green = pixel.blue = pixel.alpha = 0xFF;
+			pixel.red = pixel.green = pixel.blue = pixel.alpha = 0x00;
 			bmp_set_pixel(out, x, y, pixel);
 
 			if (x < 31)
@@ -367,7 +371,7 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 	}
 
 	while (writePos < 32 * 32 * 4) {
-		pixel.red = pixel.green = pixel.blue = pixel.alpha = 0xFF;
+		pixel.red = pixel.green = pixel.blue = pixel.alpha = 0x00;
 		bmp_set_pixel(out, x, y, pixel);
 
 		if (x < 31)
@@ -382,31 +386,6 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 
 	return true;
 }
-
-#if 0
-static void progress_handler(double d, double t)
-{
-#ifdef _WIN32
-	COORD coord;
-	CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
-
-	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &consoleInfo);
-	coord.X = consoleInfo.dwCursorPosition.X;
-	coord.Y = consoleInfo.dwCursorPosition.Y;
-#else
-	int x, y;
-	getyx(g_window, x, y);
-#endif
-	
-	printf("%f", d / t * 100);
-
-#ifdef _WIN32
-	SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
-#else
-	move(x, y);
-#endif
-}
-#endif
 
 static void makedir(const char *__name)
 {
@@ -450,8 +429,9 @@ int main(int ac, char *av[])
 	uint32_t failedIds[1 << 13];
 	char *type;
 
-	printf("Now dumping sprites into %s (This may take some time)... ", dumpFolder);
+	printf("Now dumping sprites into %s (This may take some time)...\n", dumpFolder);
 	fflush(stdout);
+
 	for (it = list->head, count = 0, countFailed = 0; it; it = it->next) {
 		/* Loop each sprite in this item, an item can have several
 		 * sprites, for example if it's a creature it will have all
@@ -485,11 +465,15 @@ int main(int ac, char *av[])
 			bmp_save(image, file);
 			bmp_destroy(image);
 			free(file);
+
 			++count;
+			if (!(count % 15))
+				printf("\r[%3d%%]", (int)100.0 * count / list->count);
+			fflush(stdout);
 		}
 	}
 
-	printf("Done.\n%d sprites were saved", count);
+	printf("\n%d sprites were saved", count);
 	if (countFailed) {
 		FILE *out;
 		printf(" and %d were corrupt", countFailed);
