@@ -1,7 +1,7 @@
 BIN = sprdump
 
 CC     = gcc
-BTYPE  = -g -O0  # Build Type
+BTYPE  = -O2  # Build Type
 CFLAGS = -std=gnu99 -Wall -Wno-unused-result ${BTYPE}
 LIBS   = -lm
 

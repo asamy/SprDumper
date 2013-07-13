@@ -156,8 +156,6 @@ static void itemlist_append(itemlist_t *list, item_t *newItem)
 		newItem->prev    = list->tail;
 		list->tail       = newItem;
 	}
-
-	++list->count;
 }
 
 static item_t *item_unserialize(FILE *fp, uint16_t id)
@@ -176,8 +174,6 @@ static item_t *item_unserialize(FILE *fp, uint16_t id)
 
 		switch (byte) {
 		case 0x1C:
-			fseek(fp, 2, SEEK_CUR);
-			break;
 		case 0x00:
 		case 0x19:
 		case 0x1D:
@@ -268,7 +264,8 @@ static itemlist_t *load_dat(const char *f)
 	fseek(fp, 2, SEEK_CUR);   /* effects?  */
 	fseek(fp, 2, SEEK_CUR);   /* missles?  */
 
-	printf("Creatures: %d Items: %d Total: %d\n", creaturesCount, itemsCount, creaturesCount + itemsCount);
+	list->count = itemsCount + creaturesCount;
+	printf("Creatures: %d Items: %d Total: %d\n", creaturesCount, itemsCount, list->count);
 	for (id = 100; id < itemsCount + creaturesCount; ++id) {
 		n = item_unserialize(fp, id);
 		if (!n) {
@@ -305,6 +302,7 @@ static bool load_spr(const char *f)
 
 /* Based on OTClient's sprite loading.
  * Write pixels into @out BMP file  */
+#define SPRITE_DATA_SIZE 32 * 32 * 4
 static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 {
 	buffer_t *sp;
@@ -326,17 +324,11 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 	rgb_pixel_t pixel;
 	int read = 0, writePos = 0, i;
 
-	while (read < pixelSize) {
+	while (read < pixelSize && writePos < SPRITE_DATA_SIZE) {
 		uint16_t transparentPixels = bget16(sp);
 		uint16_t colorizedPixels   = bget16(sp);
 
-		if (writePos + transparentPixels * 4 + colorizedPixels * 3 >=
-				32 * 32 * 4) {
-			fprintf(stderr, "corrupt sprite id %hd.\n", spriteId);
-			return false;
-		}
-
-		for (i = 0; i < transparentPixels; ++i) {
+		for (i = 0; i < transparentPixels && writePos < SPRITE_DATA_SIZE; ++i) {
 			pixel.red = pixel.green = pixel.blue = pixel.alpha = 0x00;
 			bmp_set_pixel(out, x, y, pixel);
 
@@ -350,7 +342,7 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 			writePos += 4;
 		}
 
-		for (i = 0; i < colorizedPixels; ++i) {
+		for (i = 0; i < colorizedPixels && writePos < SPRITE_DATA_SIZE; ++i) {
 			pixel.red   = bgetc(sp);
 			pixel.green = bgetc(sp);
 			pixel.blue  = bgetc(sp);
@@ -370,7 +362,7 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 		read += 4 + (3 * colorizedPixels);
 	}
 
-	while (writePos < 32 * 32 * 4) {
+	while (writePos < SPRITE_DATA_SIZE) {
 		pixel.red = pixel.green = pixel.blue = pixel.alpha = 0x00;
 		bmp_set_pixel(out, x, y, pixel);
 
@@ -467,8 +459,8 @@ int main(int ac, char *av[])
 			free(file);
 
 			++count;
-			if (!(count % 15))
-				printf("\r[%3d%%]", (int)100.0 * count / list->count);
+			if (!(count % 50))
+				printf("\r[%3d%%]", 100 * count / list->count);
 			fflush(stdout);
 		}
 	}
