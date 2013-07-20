@@ -20,7 +20,6 @@
  * THE SOFTWARE.
  */
 #include "buffer.h"
-#include "bmpfile.h"
 #include "asprintf.h"
 
 #ifdef NDEBUG
@@ -35,6 +34,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <png.h>
 
 #define min(a, b)				\
 	__extension__ ({			\
@@ -78,6 +78,24 @@ typedef struct itemlist {
 	item_t *tail;
 	uint32_t count;
 } itemlist_t;
+
+typedef struct {
+	uint8_t red;
+	uint8_t green;
+	uint8_t blue;
+	uint8_t alpha;
+} pixel_t;
+
+typedef struct {
+	pixel_t *pixels;
+	size_t width;
+	size_t height;
+} bitmap_t;
+
+static pixel_t *pixel_at(bitmap_t *bitmap, int x, int y)
+{
+	return bitmap->pixels + bitmap->width * x + y;
+}
 
 static
 #ifdef __GNUC__
@@ -303,7 +321,7 @@ static bool load_spr(const char *f)
 /* Based on OTClient's sprite loading.
  * Write pixels into @out BMP file  */
 #define SPRITE_DATA_SIZE 32 * 32 * 4
-static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
+static bool spr_write_pixels(uint16_t spriteId, bitmap_t *bitmap)
 {
 	buffer_t *sp;
 	if (spriteId == 0)
@@ -321,16 +339,16 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 
 	uint16_t pixelSize = bget16(sp);
 	uint16_t x = 0, y = 0;
-	rgb_pixel_t pixel;
 	int read = 0, writePos = 0, i;
+	pixel_t *pixel;
 
 	while (read < pixelSize && writePos < SPRITE_DATA_SIZE) {
 		uint16_t transparentPixels = bget16(sp);
 		uint16_t colorizedPixels   = bget16(sp);
 
 		for (i = 0; i < transparentPixels && writePos < SPRITE_DATA_SIZE; ++i) {
-			pixel.red = pixel.green = pixel.blue = pixel.alpha = 0x00;
-			bmp_set_pixel(out, x, y, pixel);
+			pixel = pixel_at(bitmap, x, y);
+			pixel->red = pixel->green = pixel->blue = pixel->alpha = 0x00;
 
 			if (x < 31)
 				++x;
@@ -343,12 +361,12 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 		}
 
 		for (i = 0; i < colorizedPixels && writePos < SPRITE_DATA_SIZE; ++i) {
-			pixel.red   = bgetc(sp);
-			pixel.green = bgetc(sp);
-			pixel.blue  = bgetc(sp);
-			pixel.alpha = 0xFF;
+			pixel = pixel_at(bitmap, x, y);
+			pixel->red   = bgetc(sp);
+			pixel->green = bgetc(sp);
+			pixel->blue  = bgetc(sp);
+			pixel->alpha = 0xFF;
 
-			bmp_set_pixel(out, x, y, pixel);
 			if (x < 31)
 				++x;
 			else {
@@ -363,8 +381,8 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 	}
 
 	while (writePos < SPRITE_DATA_SIZE) {
-		pixel.red = pixel.green = pixel.blue = pixel.alpha = 0x00;
-		bmp_set_pixel(out, x, y, pixel);
+		pixel = pixel_at(bitmap, x, y);
+		pixel->red = pixel->green = pixel->blue = pixel->alpha = 0x00;
 
 		if (x < 31)
 			++x;
@@ -379,8 +397,81 @@ static bool spr_write_pixels(uint16_t spriteId, bmpfile_t *out)
 	return true;
 }
 
+static bool save_png(bitmap_t *bitmap, const char *path)
+{
+	FILE *fp;
+	png_structp png = NULL;
+	png_infop info = NULL;
+	size_t x, y;
+	png_byte **rows = NULL;
+
+	int pixelSize = 4;
+	int depth = 8;
+
+	fp = fopen(path, "wb");
+	if (!fp)
+		return false;
+
+	png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+	if (!png)
+		return false;
+
+	info = png_create_info_struct(png);
+	if (!info) {
+		png_destroy_write_struct(&png, &info);
+		return false;
+	}
+
+	if (setjmp(png_jmpbuf(png))) {
+		png_destroy_write_struct(&png, &info);
+		return false;
+	}
+
+	png_set_IHDR(png,
+		     info,
+		     bitmap->width,
+		     bitmap->height,
+		     depth,
+		     PNG_COLOR_TYPE_RGBA,
+		     PNG_INTERLACE_NONE,
+		     PNG_COMPRESSION_TYPE_DEFAULT,
+		     PNG_FILTER_TYPE_DEFAULT
+		    );
+
+	rows = png_malloc(png, bitmap->height * sizeof(png_byte *));
+	for (y = 0; y < bitmap->height; ++y) {
+		png_byte * row =
+			png_malloc(png, sizeof(uint8_t) * bitmap->width * pixelSize);
+		rows[y] = row;
+		for (x = 0; x < bitmap->width; ++x) {
+			pixel_t *pixel = pixel_at(bitmap, x, y);
+			*row++ = pixel->red;
+			*row++ = pixel->green;
+			*row++ = pixel->blue;
+			*row++ = pixel->alpha;
+		}
+	}
+
+	png_init_io(png, fp);
+	png_set_rows(png, info, rows);
+	png_write_png(png, info, PNG_TRANSFORM_IDENTITY, NULL);
+
+	for (y = 0; y < bitmap->height; ++y)
+		png_free(png, rows[y]);
+	png_free(png, rows);
+
+	png_destroy_write_struct(&png, &info);
+	fclose(fp);
+	return true;
+}
+
 static void makedir(const char *__name)
 {
+	/* Check if the directory already exists.  */
+	struct stat st;
+	if (stat(__name, &st) == 0)
+		return;
+
 	printf("Creating directory %s... ", __name);
 	if (mkdir(__name, 0777) != 0)
 		critical("Failed!");
@@ -416,7 +507,6 @@ int main(int ac, char *av[])
 		makedir(tmpf);
 	}
 
-	bmpfile_t *image;
 	int count, countFailed, i, num;
 	uint32_t failedIds[1 << 13];
 	char *type;
@@ -435,28 +525,30 @@ int main(int ac, char *av[])
 			type = "Creatures";
 
 		for (num = 0, i = 0; i < it->spriteCount; ++i) {
-			/* Depth is always 24.  */
-			if (!(image = bmp_create(it->exactSize, it->exactSize, 24)))
-				critical("Internal error: Failed to create BMP image in memory.");
+			bitmap_t bmp;
 
-			if (!spr_write_pixels(it->spriteIds[i], image)) {
+			bmp.width = bmp.height = it->exactSize;
+			bmp.pixels = calloc(sizeof(pixel_t), it->exactSize * it->exactSize);
+			if (!spr_write_pixels(it->spriteIds[i], &bmp)) {
 				/* FIXME: Usually when the spr_write_pixels returns false, all of the
 				 * item sprites are corrupt, which is extremely odd.
 				 * This happens when loading Tibia files of 9.6, haven't tested
 				 * with any other Tibia version.  */
 				assert(countFailed < (1<<13));
 				failedIds[countFailed++] = it->id;
-				bmp_destroy(image);
+				free(bmp.pixels);
 				break;
 			}
 
 			char *file;
 			/* ./dumpFolder/ItemType/ItemId_sNumSprite/  */
-			if (!asprintf(&file, "%s/%s/%d_s%d.bmp", dumpFolder, type, it->id, num++))
+			if (!asprintf(&file, "%s/%s/%d_s%d.png", dumpFolder, type, it->id, num++))
 				abort();
-			bmp_save(image, file);
-			bmp_destroy(image);
+			if (!save_png(&bmp, file))
+				abort();
+
 			free(file);
+			free(bmp.pixels);
 
 			++count;
 			if (!(count % 50))

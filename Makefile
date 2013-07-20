@@ -1,11 +1,11 @@
 BIN = sprdump
 
 CC     = gcc
-BTYPE  = -O2  # Build Type
+BTYPE  = -g -O0  # Build Type
 CFLAGS = -std=gnu99 -Wall -Wno-unused-result ${BTYPE}
-LIBS   = -lm
+LIBS   = -lm -lpng
 
-SRC  = asprintf.c bmpfile.c buffer.c main.c
+SRC  = asprintf.c buffer.c main.c
 OBJ  = obj
 OBJS = $(SRC:%.c=$(OBJ)/%.o)
 

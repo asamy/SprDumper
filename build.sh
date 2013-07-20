@@ -19,5 +19,5 @@ check_fail "Compilation failed, can't continue."
 ./sprdump images
 check_fail "Program execution failed, can't open a test image."
 
-feh images/Creatures/12874_s1.bmp  # Snake
+feh images/Creatures/12874_s1.png  # Snake
 
