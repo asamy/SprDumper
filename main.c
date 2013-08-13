@@ -63,21 +63,17 @@ typedef enum itemtype {
 typedef struct item {
 	uint16_t id;
 	uint8_t width, height;
-	uint16_t exactSize;
 
 	uint16_t *spriteIds;
 	uint32_t spriteCount;
 	itemtype_t iType;
 
-	struct item *next, *prev;
+	struct item *next;
 } item_t;
 
-/* Doubly-Linked list.  */
-typedef struct itemlist {
-	item_t *head;
-	item_t *tail;
-	uint32_t count;
-} itemlist_t;
+typedef item_t *itemlist_t;
+#define foreach_item(list, i)	\
+	for ((i) = *(list); (i); (i) = (i)->next)
 
 typedef struct {
 	uint8_t red;
@@ -142,12 +138,10 @@ static itemlist_t *itemlist_init(void)
 {
 	itemlist_t *ret;
 
-	ret = malloc(sizeof(*ret));
+	ret = calloc(1, sizeof(*ret));
 	if (!ret)
 		return NULL;
 
-	ret->head = ret->tail = NULL;
-	ret->count = 0;
 	return ret;
 }
 
@@ -155,7 +149,7 @@ static void itemlist_destroy(itemlist_t *list)
 {
 	item_t *tmp, *p;
 
-	tmp = list->head;
+	tmp = *list;
 	while (tmp) {
 		p = tmp->next;
 		item_destroy(tmp);
@@ -167,13 +161,8 @@ static void itemlist_destroy(itemlist_t *list)
 
 static void itemlist_append(itemlist_t *list, item_t *newItem)
 {
-	if (!list->tail)
-		list->head = list->tail = newItem;
-	else {
-		list->tail->next = newItem;
-		newItem->prev    = list->tail;
-		list->tail       = newItem;
-	}
+	newItem->next = *list;
+	*list = newItem;
 }
 
 static item_t *item_unserialize(FILE *fp, uint16_t id)
@@ -237,10 +226,8 @@ static item_t *item_unserialize(FILE *fp, uint16_t id)
 
 	ret->width  = fgetc(fp);
 	ret->height = fgetc(fp);
-	if (ret->width > 1 || ret->height > 1)  /* Walls etc.  */
-		ret->exactSize = min((int)fgetc(fp), max(ret->width * 32, ret->height * 32));
-	else
-		ret->exactSize = 32;
+	if (ret->width > 1 || ret->height > 1)
+		fgetc(fp);
 
 	ret->spriteCount = ret->width * ret->height * (int)fgetc(fp) * (int)fgetc(fp) * (int)fgetc(fp) * (int)fgetc(fp) * (int)fgetc(fp);
 	if (!(ret->spriteIds = calloc(ret->spriteCount, sizeof(uint16_t))))
@@ -260,7 +247,7 @@ static item_t *item_unserialize(FILE *fp, uint16_t id)
 	return ret;
 }
 
-static itemlist_t *load_dat(const char *f)
+static itemlist_t *load_dat(const char *f, int *maxCount)
 {
 	FILE *fp;
 	item_t *n;
@@ -282,8 +269,8 @@ static itemlist_t *load_dat(const char *f)
 	fseek(fp, 2, SEEK_CUR);   /* effects?  */
 	fseek(fp, 2, SEEK_CUR);   /* missles?  */
 
-	list->count = itemsCount + creaturesCount;
-	printf("Creatures: %d Items: %d Total: %d\n", creaturesCount, itemsCount, list->count);
+	printf("Creatures: %d Items: %d Total: %d\n",
+			creaturesCount, itemsCount, creaturesCount + itemsCount);
 	for (id = 100; id < itemsCount + creaturesCount; ++id) {
 		n = item_unserialize(fp, id);
 		if (!n) {
@@ -296,6 +283,7 @@ static itemlist_t *load_dat(const char *f)
 		else
 			n->iType = Item;
 		itemlist_append(list, n);
+		++(*maxCount);
 	}
 
 out:
@@ -318,8 +306,7 @@ static bool load_spr(const char *f)
 	return true;
 }
 
-/* Based on OTClient's sprite loading.
- * Write pixels into @out BMP file  */
+/** Based on OTClient's sprite loading.  Writes pixel into @bitmap  */
 #define SPRITE_DATA_SIZE 32 * 32 * 4
 static bool spr_write_pixels(uint16_t spriteId, bitmap_t *bitmap)
 {
@@ -483,12 +470,13 @@ int main(int ac, char *av[])
 	char *dumpFolder = av[1];
 	itemlist_t *list;
 	item_t *it;
+	int maxCount;
 
-	if (*dumpFolder == '\0')
+	if (ac != 2)
 		critical("Usage: %s <folder to dump into>", av[0]);
 
-	if (!(list = load_dat("./Tibia.dat")))
-		critical("Cannot load Tibia.dat!");
+	if (!(list = load_dat("./Tibia.dat", &maxCount)))
+		critical("Failed to load Tibia.dat!");
 
 	if (!load_spr("./Tibia.spr"))
 		critical("Cannot load Tibia.spr!");
@@ -507,14 +495,14 @@ int main(int ac, char *av[])
 		makedir(tmpf);
 	}
 
-	int count, countFailed, i, num;
+	int count = 0, countFailed = 0, i, num;
 	uint32_t failedIds[1 << 13];
 	char *type;
 
 	printf("Now dumping sprites into %s (This may take some time)...\n", dumpFolder);
 	fflush(stdout);
 
-	for (it = list->head, count = 0, countFailed = 0; it; it = it->next) {
+	foreach_item(list, it) {
 		/* Loop each sprite in this item, an item can have several
 		 * sprites, for example if it's a creature it will have all
 		 * of the possible creature directions. For an item
@@ -527,8 +515,8 @@ int main(int ac, char *av[])
 		for (num = 0, i = 0; i < it->spriteCount; ++i) {
 			bitmap_t bmp;
 
-			bmp.width = bmp.height = it->exactSize;
-			bmp.pixels = calloc(sizeof(pixel_t), it->exactSize * it->exactSize);
+			bmp.width = bmp.height = 32;
+			bmp.pixels = calloc(sizeof(pixel_t), 32 * 32);
 			if (!spr_write_pixels(it->spriteIds[i], &bmp)) {
 				/* FIXME: Usually when the spr_write_pixels returns false, all of the
 				 * item sprites are corrupt, which is extremely odd.
@@ -549,12 +537,12 @@ int main(int ac, char *av[])
 
 			free(file);
 			free(bmp.pixels);
-
-			++count;
-			if (!(count % 50))
-				printf("\r[%3d%%]", 100 * count / list->count);
-			fflush(stdout);
 		}
+
+		++count;
+		if (!(count % 2))
+			printf("\r[%3d%%]", 100 * count / maxCount);
+		fflush(stdout);
 	}
 
 	printf("\n%d sprites were saved", count);
