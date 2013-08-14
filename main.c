@@ -49,12 +49,6 @@
 		_a > _b ? _a : _b;		\
 	})
 
-static struct {
-	buffer_t *bp;
-	uint16_t s_total;
-	uint32_t s_offset;
-} g_spr;
-
 typedef enum itemtype {
 	Item,
 	Creature
@@ -219,8 +213,7 @@ static item_t *item_unserialize(FILE *fp, uint16_t id)
 			fseek(fp, 4, SEEK_CUR);
 			break;
 		default:
-			fprintf(stderr, "Failed to load item of id %d; Unknown byte 0x%x.\n", id, byte);
-			return NULL;
+			critical("Failed to load item of id %d; Unknown byte 0x%x.\n", id, byte);
 		}
 	}
 
@@ -291,34 +284,29 @@ out:
 	return list;
 }
 
-static bool load_spr(const char *f)
+static buffer_t *load_spr(const char *f, uint32_t *off, uint16_t *total)
 {
 	buffer_t *bp;
 
-	bp = balloc_fp(f);
+	bp = balloc(f);
 	if (!bp)
-		return false;
+		return NULL;
 
 	bseek(bp, 4);
-	g_spr.s_total  = bget16(bp);
-	g_spr.s_offset = btell(bp);
-	g_spr.bp       = bp;
-	return true;
+	*total  = bget16(bp);
+	*off = btell(bp);
+	return bp;
 }
 
 /** Based on OTClient's sprite loading.  Writes pixel into @bitmap  */
 #define SPRITE_DATA_SIZE 32 * 32 * 4
-static bool spr_write_pixels(uint16_t spriteId, bitmap_t *bitmap)
+static bool spr_write_pixels(uint16_t spriteId,
+				buffer_t *sp, uint32_t offset, uint16_t total, bitmap_t *bitmap)
 {
-	buffer_t *sp;
 	if (spriteId == 0)
 		return false;
 
-	sp = g_spr.bp;
-	if (!sp)
-		abort();
-
-	bseek(sp, ((spriteId - 1) * 4) + g_spr.s_offset);
+	bseek(sp, ((spriteId - 1) * 4) + offset);
 	uint32_t address  = bget32(sp);
 	if (address == 0)
 		return false;
@@ -392,7 +380,7 @@ static bool save_png(bitmap_t *bitmap, const char *path)
 	size_t x, y;
 	png_byte **rows = NULL;
 
-	int pixelSize = 4;
+	int pixelSize = 4;	/* rgba  */
 	int depth = 8;
 
 	fp = fopen(path, "wb");
@@ -427,7 +415,7 @@ static bool save_png(bitmap_t *bitmap, const char *path)
 
 	rows = png_malloc(png, bitmap->height * sizeof(png_byte *));
 	for (y = 0; y < bitmap->height; ++y) {
-		png_byte * row =
+		png_byte *row =
 			png_malloc(png, sizeof(uint8_t) * bitmap->width * pixelSize);
 		rows[y] = row;
 		for (x = 0; x < bitmap->width; ++x) {
@@ -470,7 +458,7 @@ int main(int ac, char *av[])
 	char *dumpFolder = av[1];
 	itemlist_t *list;
 	item_t *it;
-	int maxCount;
+	int maxCount = 0;
 
 	if (ac != 2)
 		critical("Usage: %s <folder to dump into>", av[0]);
@@ -478,9 +466,13 @@ int main(int ac, char *av[])
 	if (!(list = load_dat("./Tibia.dat", &maxCount)))
 		critical("Failed to load Tibia.dat!");
 
-	if (!load_spr("./Tibia.spr"))
-		critical("Cannot load Tibia.spr!");
+	uint32_t sp_off;
+	uint16_t sp_total;
+	buffer_t *sp = load_spr("./Tibia.spr", &sp_off, &sp_total);
+	if (!sp)
+		critical("Failed to load Tibia.spr!");
 
+	printf("Total sprites found in Tibia.spr: %hd\n", sp_total);
 	{
 		/* Make the directories:
 		 * - dumpFolder
@@ -495,8 +487,9 @@ int main(int ac, char *av[])
 		makedir(tmpf);
 	}
 
+#define MAX_FAILED_SIZE (1<<13)
 	int count = 0, countFailed = 0, i, num;
-	uint32_t failedIds[1 << 13];
+	uint32_t failedIds[MAX_FAILED_SIZE];
 	char *type;
 
 	printf("Now dumping sprites into %s (This may take some time)...\n", dumpFolder);
@@ -517,12 +510,12 @@ int main(int ac, char *av[])
 
 			bmp.width = bmp.height = 32;
 			bmp.pixels = calloc(sizeof(pixel_t), 32 * 32);
-			if (!spr_write_pixels(it->spriteIds[i], &bmp)) {
+			if (!spr_write_pixels(it->spriteIds[i], sp, sp_off, sp_total, &bmp)) {
 				/* FIXME: Usually when the spr_write_pixels returns false, all of the
 				 * item sprites are corrupt, which is extremely odd.
-				 * This happens when loading Tibia files of 9.6, haven't tested
+				 * This happens when loading Tibia files of 8.6, haven't tested
 				 * with any other Tibia version.  */
-				assert(countFailed < (1<<13));
+				assert(countFailed < MAX_FAILED_SIZE);
 				failedIds[countFailed++] = it->id;
 				free(bmp.pixels);
 				break;
@@ -570,7 +563,7 @@ int main(int ac, char *av[])
 	putchar('\n');
 
 	itemlist_destroy(list);
-	bfree(&g_spr.bp);
+	bfree(sp);
 	return 0;
 }
 

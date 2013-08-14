@@ -26,17 +26,14 @@
 
 typedef struct buffer buffer_t;
 
-extern buffer_t *balloc(int bsize);
-extern buffer_t *balloc_fp(const char *f);
-extern void      bfree(buffer_t **b);
-/*extern void           bflush(buffer_t *b);*/
+extern buffer_t *balloc(const char *f);
+extern void      bfree(buffer_t *b);
 
-extern int      btell(buffer_t *bp);
+extern int      btell(const buffer_t *bp);
 extern uint8_t  bgetc(buffer_t *bp);
 extern uint16_t bget16(buffer_t *bp);
 extern uint32_t bget32(buffer_t *bp);
 
-extern void     badd(buffer_t *bp, uint8_t byte);
 extern void     bskip(buffer_t *bp, int size);
 extern void	bseek(buffer_t *bp, int pos);
 

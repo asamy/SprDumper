@@ -25,11 +25,12 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "buffer.h"
 
 typedef struct buffer {
-	int wpos, rpos, size;
+	uint32_t rpos, size;
 	uint8_t *data;
 } buffer_t;
 
@@ -52,21 +53,6 @@ static bool stat_file(const char *f, int *size)
 	return true;
 }
 
-static void bresize(buffer_t *p, int nsize)
-{
-	uint8_t *n;
-	if ((n = malloc(nsize)) != NULL) {
-		p->size = nsize;
-		memcpy(n, p->data, p->wpos);
-
-		if (p->data)
-			free(p->data);
-
-		p->data = n;
-		memset(p->data, 0, p->size - p->wpos);
-	}
-}
-
 uint32_t bget32(buffer_t *bp)
 {
 	uint32_t tmp = u32(&bp->data[bp->rpos]);
@@ -84,22 +70,13 @@ uint16_t bget16(buffer_t *bp)
 uint8_t bgetc(buffer_t *bp)
 {
 	uint8_t tmp = bp->data[bp->rpos];
-	bp->rpos+=1;
+	++bp->rpos;
 	return tmp;
 }
 
-int btell(buffer_t *bp)
+int btell(const buffer_t *bp)
 {
 	return bp->rpos;
-}
-
-void badd(buffer_t *buffer, uint8_t byte)
-{
-	if (buffer->wpos+1 > buffer->size)
-		bresize(buffer, (buffer->size * 3) / 2 + 1);
-
-	buffer->data[buffer->wpos] = byte;
-	++buffer->wpos;
 }
 
 void bskip(buffer_t *buffer, int size)
@@ -116,22 +93,7 @@ void bseek(buffer_t *buffer, int pos)
 	buffer->rpos = pos;
 }
 
-buffer_t *balloc(int bsize)
-{
-	buffer_t *b;
-	if (!(b = malloc(sizeof(*b))))
-		abort();
-
-	if (!(b->data = malloc(bsize)))
-		abort();
-
-	memset(b->data, 0, bsize);
-	b->size  = bsize;
-	b->wpos  = b->rpos = 0;
-	return b;
-}
-
-buffer_t* balloc_fp(const char* f)
+buffer_t* balloc(const char* f)
 {
 	FILE *fp;
 	buffer_t *res;
@@ -148,15 +110,23 @@ buffer_t* balloc_fp(const char* f)
 		return NULL;
 	}
 
-	res = balloc(fsize);
+	res = malloc(sizeof(*res));
 	if (!res) {
 		fprintf(stderr, "could not allocate buffer for %s with size %d\n", f, fsize);
 		goto out;
 	}
 
+	res->data = calloc(1, fsize);
+	if (!res->data) {
+		fprintf(stderr, "could not allocate enough memory to hold the cached data\n");
+		goto out;
+	}
+
+	res->size = fsize;
+	res->rpos = 0;
 	if (fread(res->data, 1, res->size, fp) != res->size) {
 		fprintf(stderr, "could not cache file %s of size %d\n", f, res->size);
-		bfree(&res);
+		bfree(res);
 		goto out;
 	}
 
@@ -165,10 +135,9 @@ out:
 	return res;
 }
 
-void bfree(buffer_t **b)
+void bfree(buffer_t *b)
 {
-	free((*b)->data);
-	free(*b);
-	*b = NULL;
+	free(b->data);
+	free(b);
 }
 
